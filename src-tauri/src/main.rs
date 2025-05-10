@@ -5,8 +5,11 @@ use std::path::Path;
 
 use jwalk::WalkDir;
 use rusqlite::Connection;
-use tauri::AppHandle;
 use std::time::Instant;
+use tauri::AppHandle;
+
+mod mft;
+use crate::mft::mft::iter_mft;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn main() {
@@ -27,7 +30,6 @@ fn index_directory(
     path_string: String,
     index_files: bool,
 ) -> Result<String, String> {
-
     let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string)?;
 
     let mut db =
@@ -52,81 +54,65 @@ fn index_directory(
     let mut folders_found = 0;
     let mut files_found = 0;
 
-    let is_ntfs = guessfs_lib::is_ntfs(&path);
-    if !is_ntfs {
-        println!("Directory is not on NTFS filesystem: {}", path_string);
-    } else {
-        println!("Directory is on NTFS filesystem: {}", path_string);
-        // TODO: use MFT to index dirs
-    }
-
     let start_time = Instant::now();
 
-    for entry in WalkDir::new(path) {
-        match entry {
-            Ok(entry) => {
-                if entry.file_type().is_dir() {
-                    if let Some(path) = entry.path().to_str() {
-                        let path = path.to_string();
-                        match transaction.execute(
-                            "INSERT OR IGNORE INTO folders (path) VALUES (?1)",
-                            rusqlite::params![path],
-                        ) {
-                            Ok(_) => {
-                                folders_found += 1;
-                            }
-                            Err(e) => {
-                                eprintln!("Error inserting {} into db: {}", path, e);
-                            }
-                        }
-                    } else {
-                        eprintln!("Path not UTF-8: {:?}", entry.path());
-                    }
-                } else {
-                    if index_files {
+    let is_ntfs = guessfs_lib::is_ntfs(&path);
+    let mut found_dirs = Vec::new();
+    let mut found_files = Vec::new();
+
+    let find_start = Instant::now();
+    if !is_ntfs {
+        println!("Directory is not on NTFS filesystem: {}", path_string);
+        for entry in WalkDir::new(path) {
+            match entry {
+                Ok(entry) => {
+                    if entry.file_type().is_dir() {
                         if let Some(path) = entry.path().to_str() {
-                            let path = path.to_string();
-                            // get parent folder path
-                            if let Some(parent) = entry.path().parent() {
-                                if let Some(parent_str) = parent.to_str() {
-                                    // query for folder_id
-                                    match transaction.query_row(
-                                        "SELECT id FROM folders WHERE path = ?1",
-                                        rusqlite::params![parent_str],
-                                        |row| row.get::<_, i64>(0),
-                                    ) {
-                                        Ok(folder_id) => {
-                                            match transaction.execute(
-                                                "INSERT OR IGNORE INTO files (path, folder_id) VALUES (?1, ?2)",
-                                                rusqlite::params![path, folder_id],
-                                            ) {
-                                                Ok(_) => files_found += 1,
-                                                Err(e) => eprintln!("Error inserting {} into db: {}", path, e),
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Parent folder not found in db for file {}: {}", path, e);
-                                        }
-                                    }
-                                } else {
-                                    eprintln!("Parent path not UTF-8: {:?}", parent);
-                                }
-                            } else {
-                                eprintln!("No parent folder for file: {}", path);
-                            }
+                            found_dirs.push(path.to_string());
+                        } else {
+                            eprintln!("Path not UTF-8: {:?}", entry.path());
+                        }
+                    } else if index_files {
+                        if let Some(path) = entry.path().to_str() {
+                            found_files.push(path.to_string());
                         } else {
                             eprintln!("Path not UTF-8: {:?}", entry.path());
                         }
                     }
                 }
+                Err(e) => {
+                    eprintln!("Error reading directory: {}", e);
+                }
             }
-            Err(e) => {
-                eprintln!("Error reading directory: {}", e);
+        }
+    } else {
+        println!("Directory is on NTFS filesystem: {}", path_string);
+        let (dirs, files) = iter_mft(path_string.clone())
+            .map_err(|e| format!("Failed to index NTFS volume: {}", e))?;
+        found_dirs = dirs;
+        found_files = files;
+    }
+    let find_duration = find_start.elapsed();
+
+    let push_start = Instant::now();
+    for dir_path in &found_dirs {
+        if guessfs_lib::push_folder(&transaction, dir_path) {
+            folders_found += 1
+        }
+    }
+    if index_files {
+        for file_path in &found_files {
+            if guessfs_lib::push_file(&transaction, file_path) {
+                files_found += 1
             }
         }
     }
+    let push_duration = push_start.elapsed();
 
     let duration = start_time.elapsed();
+
+    println!("Time to find entries: {:.2?}", find_duration);
+    println!("Time to push to DB: {:.2?}", push_duration);
 
     transaction
         .commit()
