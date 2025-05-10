@@ -43,6 +43,15 @@ pub fn init_db(conn: &Connection) -> RusqliteResult<()> {
         [],
     )?;
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY,
+            path TEXT UNIQUE NOT NULL,
+            folder_id INTEGER NOT NULL,
+            FOREIGN KEY (folder_id) REFERENCES folders(id)
+        )",
+        [],
+    )?;
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_folder_path ON folders (path);",
         [],
     )?;

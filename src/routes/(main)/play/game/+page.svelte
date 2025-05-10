@@ -40,7 +40,7 @@
 
 	function test() {
 		console.log("Test clicked");
-		invoke("index_directory", { pathString: "C:\\" })
+		invoke("index_directory", { pathString: "C:\\", indexFiles: true })
 			.then((result) => {
 				console.log("Result:", result);
 			})
