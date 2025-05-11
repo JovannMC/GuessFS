@@ -1,6 +1,5 @@
 use rusqlite::{Connection, Result as RusqliteResult};
 use sha2::{Digest, Sha256};
-use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr;
@@ -65,14 +64,14 @@ pub fn get_drive_letter(path_string: String) -> char {
 pub fn is_ntfs(path: &Path) -> bool {
     #[cfg(target_os = "windows")]
     {
-        let mut root_path = path
+        let root_path = path
             .components()
             .next()
             .map(|c| c.as_os_str().to_os_string())
             .unwrap_or_default();
         if root_path.is_empty() {
-            // fallback to C:\
-            root_path = OsStr::new("C:\\").to_os_string();
+            // no drive letter found
+            return false;
         }
         let mut root_path_w: Vec<u16> = root_path.encode_wide().collect();
         if !root_path_w.ends_with(&[b'\\' as u16]) {
