@@ -1,15 +1,14 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
+use guessfs_lib::get_drive_letter;
 use jwalk::WalkDir;
 use rusqlite::Connection;
 use std::time::Instant;
 use tauri::AppHandle;
-
-mod mft;
-use crate::mft::mft::iter_mft;
+use usn_journal_rs::{mft::Mft, path_resolver::MftPathResolver};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn main() {
@@ -51,68 +50,186 @@ fn index_directory(
     let transaction = db
         .transaction()
         .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    let start_time = Instant::now();
     let mut folders_found = 0;
     let mut files_found = 0;
 
-    let start_time = Instant::now();
-
     let is_ntfs = guessfs_lib::is_ntfs(&path);
-    let mut found_dirs = Vec::new();
-    let mut found_files = Vec::new();
-
-    let find_start = Instant::now();
+    // Non-NTFS filesystem / not Windows
     if !is_ntfs {
-        println!("Directory is not on NTFS filesystem: {}", path_string);
+        println!("Directory is not on NTFS filesystem: {path_string}");
+        // prepare folder and file insert statements
+        let mut folder_stmt = transaction
+            .prepare("INSERT OR IGNORE INTO folders (path) VALUES (?1)")
+            .unwrap();
+        let mut file_stmt = transaction
+            .prepare("INSERT OR IGNORE INTO files (path, folder_id) VALUES (?1, ?2)")
+            .unwrap();
+        // build a map to query instead of querying the DB each time
+        let mut folder_map = std::collections::HashMap::new();
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) => {
+                    // if directory, insert
                     if entry.file_type().is_dir() {
                         if let Some(path) = entry.path().to_str() {
-                            found_dirs.push(path.to_string());
+                            if folder_stmt.execute(rusqlite::params![path]).unwrap() > 0 {
+                                folders_found += 1
+                            }
+                            if !folder_map.contains_key(path) {
+                                let id: i64 = transaction
+                                    .query_row(
+                                        "SELECT id FROM folders WHERE path = ?1",
+                                        rusqlite::params![path],
+                                        |row| row.get(0),
+                                    )
+                                    .unwrap();
+                                folder_map.insert(path.to_string(), id);
+                            }
                         } else {
                             eprintln!("Path not UTF-8: {:?}", entry.path());
                         }
+                    // if user wants to index files, insert them too
                     } else if index_files {
                         if let Some(path) = entry.path().to_str() {
-                            found_files.push(path.to_string());
+                            if let Some(parent) =
+                                std::path::Path::new(path).parent().and_then(|p| p.to_str())
+                            {
+                                if let Some(folder_id) = folder_map.get(parent) {
+                                    if file_stmt
+                                        .execute(rusqlite::params![path, folder_id])
+                                        .unwrap()
+                                        > 0
+                                    {
+                                        files_found += 1
+                                    }
+                                } else {
+                                    // if not in map, fetch from DB
+                                    if let Ok(folder_id) = transaction.query_row(
+                                        "SELECT id FROM folders WHERE path = ?1",
+                                        rusqlite::params![parent],
+                                        |row| row.get(0),
+                                    ) {
+                                        folder_map.insert(parent.to_string(), folder_id);
+                                        if file_stmt
+                                            .execute(rusqlite::params![path, &folder_id])
+                                            .unwrap()
+                                            > 0
+                                        {
+                                            files_found += 1
+                                        }
+                                    } else {
+                                        eprintln!("Parent folder not found in db for file {path}");
+                                    }
+                                }
+                            } else {
+                                eprintln!("No parent folder for file: {path}");
+                            }
                         } else {
                             eprintln!("Path not UTF-8: {:?}", entry.path());
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error reading directory: {}", e);
+                    eprintln!("Error reading directory: {e}");
                 }
             }
         }
+    // NTFS filessystem
     } else {
-        println!("Directory is on NTFS filesystem: {}", path_string);
-        let (dirs, files) = iter_mft(path_string.clone())
-            .map_err(|e| format!("Failed to index NTFS volume: {}", e))?;
-        found_dirs = dirs;
-        found_files = files;
-    }
-    let find_duration = find_start.elapsed();
+        #[cfg(target_os = "windows")]
+        println!("Directory is on NTFS filesystem: {path_string}");
 
-    let push_start = Instant::now();
-    for dir_path in &found_dirs {
-        if guessfs_lib::push_folder(&transaction, dir_path) {
-            folders_found += 1
-        }
-    }
-    if index_files {
-        for file_path in &found_files {
-            if guessfs_lib::push_file(&transaction, file_path) {
-                files_found += 1
+        // scan MFT and insert folders/files into the database
+        let drive_letter = get_drive_letter(path_string.clone());
+        let mft = Mft::new_from_drive_letter(drive_letter).unwrap();
+        let mut path_resolver = MftPathResolver::new(&mft);
+
+        let mut folder_stmt = transaction
+            .prepare("INSERT OR IGNORE INTO folders (path) VALUES (?1)")
+            .unwrap();
+        let mut file_stmt = transaction
+            .prepare("INSERT OR IGNORE INTO files (path, folder_id) VALUES (?1, ?2)")
+            .unwrap();
+        let mut folder_map = HashMap::new();
+
+        println!("Starting MFT scan...");
+        for entry in mft.iter() {
+            // try to find the path if it exists
+            match path_resolver.resolve_path(&entry) {
+                Some(path_buf) => {
+                    let path_str = path_buf.to_str().unwrap_or("<invalid utf8>");
+                    // if directory, insert
+                    if entry.is_dir() {
+                        if folder_stmt.execute(rusqlite::params![path_str]).unwrap() > 0 {
+                            folders_found += 1
+                        }
+                        if !folder_map.contains_key(path_str) {
+                            let id: i64 = transaction
+                                .query_row(
+                                    "SELECT id FROM folders WHERE path = ?1",
+                                    rusqlite::params![path_str],
+                                    |row| row.get(0),
+                                )
+                                .unwrap();
+                            folder_map.insert(path_str.to_string(), id);
+                        }
+                    // if user wants to index files, insert them too
+                    } else if index_files {
+                        if let Some(parent) = std::path::Path::new(path_str)
+                            .parent()
+                            .and_then(|p| p.to_str())
+                        {
+                            let folder_id = if let Some(folder_id) = folder_map.get(parent) {
+                                *folder_id
+                            } else {
+                                // find parent folder in DB
+                                match transaction.query_row(
+                                    "SELECT id FROM folders WHERE path = ?1",
+                                    rusqlite::params![parent],
+                                    |row| row.get(0),
+                                ) {
+                                    Ok(folder_id) => {
+                                        folder_map.insert(parent.to_string(), folder_id);
+                                        folder_id
+                                    }
+                                    Err(_) => {
+                                        // create parent folder in DB if it doesn't exist
+                                        if folder_stmt.execute(rusqlite::params![parent]).unwrap() > 0 {
+                                            folders_found += 1
+                                        }
+                                        let folder_id: i64 = transaction
+                                            .query_row(
+                                                "SELECT id FROM folders WHERE path = ?1",
+                                                rusqlite::params![parent],
+                                                |row| row.get(0),
+                                            )
+                                            .unwrap();
+                                        folder_map.insert(parent.to_string(), folder_id);
+                                        folder_id
+                                    }
+                                }
+                            };
+                            if file_stmt
+                                .execute(rusqlite::params![path_str, &folder_id])
+                                .unwrap()
+                                > 0
+                            {
+                                files_found += 1
+                            }
+                        } else {
+                            eprintln!("No parent folder for file: {path_str}");
+                        }
+                    }
+                }
+                None => {
+                    continue;
+                }
             }
         }
     }
-    let push_duration = push_start.elapsed();
-
     let duration = start_time.elapsed();
-
-    println!("Time to find entries: {:.2?}", find_duration);
-    println!("Time to push to DB: {:.2?}", push_duration);
 
     transaction
         .commit()
@@ -122,7 +239,7 @@ fn index_directory(
         println!("Indexed {} files", files_found);
     }
     println!(
-        "Indexing completed in {:.2?} ({} folders, {} files)",
+        "Indexing completed in {:.3?} ({} folders, {} files)",
         duration, folders_found, files_found
     );
 

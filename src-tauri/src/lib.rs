@@ -7,7 +7,6 @@ use std::ptr;
 use std::{fs::create_dir_all, path::PathBuf};
 use tauri::{AppHandle, Manager};
 use winapi::um::fileapi::GetVolumeInformationW;
-use rusqlite::{Transaction, params};
 
 pub fn get_index_db_path(
     app_handle: &AppHandle,
@@ -55,59 +54,12 @@ pub fn init_db(conn: &Connection) -> RusqliteResult<()> {
     Ok(())
 }
 
-pub fn push_folder(transaction: &Transaction, folder_path: &str) -> bool {
-    match transaction.execute(
-        "INSERT OR IGNORE INTO folders (path) VALUES (?1)",
-        params![folder_path],
-    ) {
-        Ok(rows) => {
-            if rows > 0 {
-                true
-            } else {
-                false
-            }
-        }
-        Err(e) => {
-            eprintln!("Error inserting {folder_path} into db: {e}");
-            false
-        }
-    }
-}
-
-pub fn push_file(transaction: &Transaction, file_path: &str) -> bool {
-    if let Some(parent) = Path::new(file_path).parent().and_then(|p| p.to_str()) {
-        match transaction.query_row(
-            "SELECT id FROM folders WHERE path = ?1",
-            params![parent],
-            |row| row.get::<_, i64>(0),
-        ) {
-            Ok(folder_id) => {
-                match transaction.execute(
-                    "INSERT OR IGNORE INTO files (path, folder_id) VALUES (?1, ?2)",
-                    params![file_path, folder_id],
-                ) {
-                    Ok(rows) => {
-                        if rows > 0 {
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error inserting {file_path} into db: {e}");
-                        false
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Parent folder not found in db for file {file_path}: {e}");
-                false
-            }
-        }
-    } else {
-        eprintln!("No parent folder for file: {file_path}");
-        false
-    }
+pub fn get_drive_letter(path_string: String) -> char {
+    path_string
+        .chars()
+        .take_while(|c| *c != ':')
+        .next()
+        .expect("No drive letter found in path string")
 }
 
 pub fn is_ntfs(path: &Path) -> bool {
