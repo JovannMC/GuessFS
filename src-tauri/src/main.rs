@@ -7,7 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use guessfs_lib::get_drive_letter;
+use guessfs_lib::{get_drive_letter, IndexOptions};
 use jwalk::WalkDir;
 use rusqlite::Connection;
 use std::time::Instant;
@@ -31,14 +31,12 @@ fn main() {
 }
 
 #[tauri::command]
-fn start_indexing(
-    app_handle: AppHandle,
-    path_string: String,
-    index_files: bool,
-) -> Result<String, String> {
+fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<String, String> {
+    let mut exclude_counts: HashMap<&'static str, usize> = HashMap::new();
+
     STOP_FLAG.store(false, Ordering::Relaxed);
     tauri::async_runtime::spawn(async move {
-        let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string)?;
+        let db_path = guessfs_lib::get_index_db_path(&app_handle, &index_options.path)?;
 
         let mut db =
             Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
@@ -53,9 +51,9 @@ fn start_indexing(
             println!("Database already exists at: {}", db_path.display());
         }
 
-        let path = Path::new(&path_string);
+        let path = Path::new(&index_options.path);
         if !path.is_dir() {
-            return Err(format!("Path is not a directory: {}", path_string));
+            return Err(format!("Path is not a directory: {}", index_options.path));
         }
 
         let transaction = db
@@ -65,11 +63,15 @@ fn start_indexing(
         let start_time = Instant::now();
         let mut folders_found = 0;
         let mut files_found = 0;
+        let mut ignored = 0;
 
         let is_ntfs = guessfs_lib::is_ntfs(&path);
         // Non-NTFS filesystem / not Windows
-        if !is_ntfs {
-            println!("Directory is not on NTFS filesystem: {path_string}");
+        if is_ntfs {
+            println!(
+                "Directory is not on NTFS filesystem: {}",
+                index_options.path
+            );
             // prepare folder and file insert statements
             let mut folder_stmt = transaction
                 .prepare("INSERT OR IGNORE INTO folders (path) VALUES (?1)")
@@ -82,12 +84,32 @@ fn start_indexing(
             for entry in WalkDir::new(path) {
                 // break if user wants to stop indexing
                 if STOP_FLAG.load(Ordering::Relaxed) {
-                    println!("Indexing stopped by user.");
-                    return Ok(format!("Indexing stopped for path: {}", path_string));
+                    println!(
+                        "Indexing stopped by user in {} seconds for path: {}",
+                        start_time.elapsed().as_secs(),
+                        index_options.path
+                    );
+                    println!("Folders found: {}", folders_found);
+                    println!("Files found: {}", files_found);
+                    println!(
+                        "Ignored: {}",
+                        exclude_counts.iter().map(|(_, v)| v).sum::<usize>()
+                    );
+                    return Ok(format!("Indexing stopped for path: {}", index_options.path));
                 }
 
                 match entry {
                     Ok(entry) => {
+                        // check if needed to be excluded
+                        if guessfs_lib::should_exclude(
+                            &entry.path(),
+                            index_options.clone(),
+                            &mut exclude_counts,
+                        ) {
+                            ignored += 1;
+                            continue;
+                        }
+
                         // if directory, insert
                         if entry.file_type().is_dir() {
                             if let Some(path) = entry.path().to_str() {
@@ -108,7 +130,7 @@ fn start_indexing(
                                 eprintln!("Path not UTF-8: {:?}", entry.path());
                             }
                         // if user wants to index files, insert them too
-                        } else if index_files {
+                        } else if index_options.index_files {
                             if let Some(path) = entry.path().to_str() {
                                 if let Some(parent) =
                                     std::path::Path::new(path).parent().and_then(|p| p.to_str())
@@ -137,9 +159,14 @@ fn start_indexing(
                                                 files_found += 1
                                             }
                                         } else {
-                                            eprintln!(
-                                                "Parent folder not found in db for file {path}"
-                                            );
+                                            // not found, create parent folder in DB
+                                            if folder_stmt
+                                                .execute(rusqlite::params![parent])
+                                                .unwrap()
+                                                > 0
+                                            {
+                                                folders_found += 1
+                                            }
                                         }
                                     }
                                 } else {
@@ -156,12 +183,13 @@ fn start_indexing(
                 }
             }
         // NTFS filessystem
+        // TODO: ok the way we're accessing MFT is so god damn slow (even slower than jwalk!!) w/ the crate being used, we need to switch.
         } else {
             #[cfg(target_os = "windows")]
-            println!("Directory is on NTFS filesystem: {path_string}");
+            println!("Directory is on NTFS filesystem: {}", index_options.path);
 
             // scan MFT and insert folders/files into the database
-            let drive_letter = get_drive_letter(path_string.clone());
+            let drive_letter = get_drive_letter(index_options.path.clone());
             let mft = Mft::new_from_drive_letter(drive_letter).unwrap();
             let mut path_resolver = MftPathResolver::new(&mft);
 
@@ -177,13 +205,33 @@ fn start_indexing(
             for entry in mft.iter() {
                 // break if user wants to stop indexing
                 if STOP_FLAG.load(Ordering::Relaxed) {
-                    println!("Indexing stopped by user.");
-                    return Ok(format!("Indexing stopped for path: {}", path_string));
+                    println!(
+                        "Indexing stopped by user in {} seconds for path: {}",
+                        start_time.elapsed().as_secs(),
+                        index_options.path
+                    );
+                    println!("Folders found: {}", folders_found);
+                    println!("Files found: {}", files_found);
+                    println!(
+                        "Ignored: {}",
+                        exclude_counts.iter().map(|(_, v)| v).sum::<usize>()
+                    );
+                    return Ok(format!("Indexing stopped for path: {}", index_options.path));
                 }
 
                 // try to find the path if it exists
                 match path_resolver.resolve_path(&entry) {
                     Some(path_buf) => {
+                        // check if needed to be excluded
+                        if guessfs_lib::should_exclude(
+                            &path_buf,
+                            index_options.clone(),
+                            &mut exclude_counts,
+                        ) {
+                            ignored += 1;
+                            continue;
+                        }
+
                         let path_str = path_buf.to_str().unwrap_or("<invalid utf8>");
                         // if directory, insert
                         if entry.is_dir() {
@@ -201,7 +249,7 @@ fn start_indexing(
                                 folder_map.insert(path_str.to_string(), id);
                             }
                         // if user wants to index files, insert them too
-                        } else if index_files {
+                        } else if index_options.index_files {
                             if let Some(parent) = std::path::Path::new(path_str)
                                 .parent()
                                 .and_then(|p| p.to_str())
@@ -263,40 +311,60 @@ fn start_indexing(
         transaction
             .commit()
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-        println!("Indexed {} folders", folders_found);
-        if index_files {
-            println!("Indexed {} files", files_found);
-        }
         println!(
-            "Indexing completed in {:.3?} ({} folders, {} files)",
-            duration, folders_found, files_found
+            "Indexing completed in {:.3?} ({} folders, {} files, {} ignored)",
+            duration, folders_found, files_found, ignored
+        );
+        println!(
+            "Excluded counts: {}",
+            exclude_counts
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         Ok(format!(
-            "Indexed {} folders and {} files in {:.2?}",
-            folders_found, files_found, duration
+            "Indexed {} folders and {} files in {:.2?} ({} ignored)",
+            folders_found, files_found, duration, ignored
         ))
     });
     Ok("Indexing started".to_string())
 }
 
 #[tauri::command]
-fn stop_indexing(app_handle: AppHandle, path_string: String) {
+fn stop_indexing() {
     // stop indexing
     STOP_FLAG.store(true, Ordering::Relaxed);
-    println!("Indexing stopped for path: {}", path_string);
-    // close database connection
-    // let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string)?;
+    println!("Indexing stopped");
 }
 
 #[tauri::command]
-fn get_random_dir(app_handle: AppHandle) -> String {
-    // query database
-    "meow".to_string()
+fn get_random_dir(app_handle: AppHandle, path_string: String) -> String {
+    let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string).unwrap();
+    let db = Connection::open(&db_path).unwrap();
+    let mut stmt = db
+        .prepare("SELECT path FROM folders ORDER BY RANDOM() LIMIT 1")
+        .unwrap();
+    let mut rows = stmt.query([]).unwrap();
+    if let Some(row) = rows.next().unwrap() {
+        let path: String = row.get(0).unwrap();
+        return path;
+    }
+    "No directories found in DB".to_string()
 }
 
 #[tauri::command]
-fn get_random_file(app_handle: AppHandle) -> String {
-    // query database
-    "meow".to_string()
+fn get_random_file(app_handle: AppHandle, path_string: String) -> String {
+    let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string).unwrap();
+    let db = Connection::open(&db_path).unwrap();
+    let mut stmt = db
+        .prepare("SELECT path FROM files ORDER BY RANDOM() LIMIT 1")
+        .unwrap();
+    let mut rows = stmt.query([]).unwrap();
+    if let Some(row) = rows.next().unwrap() {
+        let path: String = row.get(0).unwrap();
+        return path;
+    }
+    "No files found in DB".to_string()
 }

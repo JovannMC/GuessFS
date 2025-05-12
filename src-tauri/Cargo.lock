@@ -1552,6 +1552,7 @@ dependencies = [
  "jwalk",
  "ntfs",
  "rand 0.9.1",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
