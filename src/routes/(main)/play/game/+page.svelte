@@ -11,7 +11,7 @@
 	let difficulty: GameDifficulty = $state("easy");
 	let gameType: GameType = $state("directory");
 	let indexOptions: IndexOptions = {
-		path: "C:\\Users\\JovannMC",
+		path: "C:\\Users\\JovannMC\\Documents",
 		index_files: true,
 		index_directories: true,
 		exclude_temporary: true,
@@ -70,7 +70,7 @@
 	}
 
 	function randomDir() {
-		invoke("get_random_dir", { pathString: "C:\\" })
+		invoke("get_random_dir", { pathString: indexOptions.path })
 			.then((result) => {
 				console.log("Random directory:", result);
 			})
@@ -80,7 +80,7 @@
 	}
 
 	function randomFile() {
-		invoke("get_random_file", { pathString: "C:\\" })
+		invoke("get_random_file", { pathString: indexOptions.path })
 			.then((result) => {
 				console.log("Random file:", result);
 			})

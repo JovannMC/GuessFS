@@ -65,11 +65,18 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
         let mut files_found = 0;
         let mut ignored = 0;
 
+        // TODO: check how is this handled in linux/macos
+        let is_root = path
+            .components()
+            .count()
+            == 1; // check if the path is a root directory (e.g., C:\)
+
         let is_ntfs = guessfs_lib::is_ntfs(&path);
         // Non-NTFS filesystem / not Windows
-        if !is_ntfs {
+        // also check if the path is not a root directory, because with MFT we can only index the entire root
+        if !is_ntfs || (is_ntfs && !is_root) {
             println!(
-                "Directory is not on NTFS filesystem: {}",
+                "Not using NTFS MFT for path: {}",
                 index_options.path
             );
             // prepare folder and file insert statements
@@ -187,7 +194,7 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
         // TODO: at least, it doesn't use as much memory
         } else {
             #[cfg(target_os = "windows")]
-            println!("Directory is on NTFS filesystem: {}", index_options.path);
+            println!("Using NTFS MFT for path: {}", index_options.path);
 
             // scan MFT and insert folders/files into the database
             let drive_letter = get_drive_letter(index_options.path.clone());
@@ -347,7 +354,7 @@ fn get_random_dir(app_handle: AppHandle, path_string: String) -> Result<String, 
 
     // prepare and execute the SQL statement
     let mut stmt = db
-        .prepare("SELECT path FROM files ORDER BY RANDOM() LIMIT 1")
+        .prepare("SELECT path FROM folders ORDER BY RANDOM() LIMIT 1")
         .map_err(|e| format!("Failed to prepare statement: {}", e))?;
     let mut rows = stmt
         .query([])
