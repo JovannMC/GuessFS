@@ -11,7 +11,7 @@
 	let difficulty: GameDifficulty = $state("easy");
 	let gameType: GameType = $state("directory");
 	let indexOptions: IndexOptions = {
-		path: "C:\\",
+		path: "C:\\Users\\JovannMC",
 		index_files: true,
 		index_directories: true,
 		exclude_temporary: true,

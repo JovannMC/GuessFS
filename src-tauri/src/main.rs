@@ -67,7 +67,7 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
 
         let is_ntfs = guessfs_lib::is_ntfs(&path);
         // Non-NTFS filesystem / not Windows
-        if is_ntfs {
+        if !is_ntfs {
             println!(
                 "Directory is not on NTFS filesystem: {}",
                 index_options.path
@@ -184,6 +184,7 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
             }
         // NTFS filessystem
         // TODO: ok the way we're accessing MFT is so god damn slow (even slower than jwalk!!) w/ the crate being used, we need to switch.
+        // TODO: at least, it doesn't use as much memory
         } else {
             #[cfg(target_os = "windows")]
             println!("Directory is on NTFS filesystem: {}", index_options.path);
@@ -340,31 +341,49 @@ fn stop_indexing() {
 }
 
 #[tauri::command]
-fn get_random_dir(app_handle: AppHandle, path_string: String) -> String {
+fn get_random_dir(app_handle: AppHandle, path_string: String) -> Result<String, String> {
     let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string).unwrap();
     let db = Connection::open(&db_path).unwrap();
+
+    // prepare and execute the SQL statement
     let mut stmt = db
-        .prepare("SELECT path FROM folders ORDER BY RANDOM() LIMIT 1")
-        .unwrap();
-    let mut rows = stmt.query([]).unwrap();
-    if let Some(row) = rows.next().unwrap() {
-        let path: String = row.get(0).unwrap();
-        return path;
+        .prepare("SELECT path FROM files ORDER BY RANDOM() LIMIT 1")
+        .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| format!("Failed to execute query: {}", e))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to get next row: {}", e))?
+    {
+        let path: String = row
+            .get(0)
+            .map_err(|e| format!("Failed to get path from row: {}", e))?;
+        return Ok(path);
     }
-    "No directories found in DB".to_string()
+    Err("No files found in DB".to_string())
 }
 
 #[tauri::command]
-fn get_random_file(app_handle: AppHandle, path_string: String) -> String {
+fn get_random_file(app_handle: AppHandle, path_string: String) -> Result<String, String> {
     let db_path = guessfs_lib::get_index_db_path(&app_handle, &path_string).unwrap();
     let db = Connection::open(&db_path).unwrap();
+
+    // prepare and execute the SQL statement
     let mut stmt = db
         .prepare("SELECT path FROM files ORDER BY RANDOM() LIMIT 1")
-        .unwrap();
-    let mut rows = stmt.query([]).unwrap();
-    if let Some(row) = rows.next().unwrap() {
-        let path: String = row.get(0).unwrap();
-        return path;
+        .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| format!("Failed to execute query: {}", e))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to get next row: {}", e))?
+    {
+        let path: String = row
+            .get(0)
+            .map_err(|e| format!("Failed to get path from row: {}", e))?;
+        return Ok(path);
     }
-    "No files found in DB".to_string()
+    Err("No files found in DB".to_string())
 }
