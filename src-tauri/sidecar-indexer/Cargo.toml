@@ -5,3 +5,8 @@ edition = "2024"
 
 [dependencies]
 clap = "4.5.38"
+directories = "6.0.0"
+guessfs = { path = "../" }
+jwalk = "0.8.1"
+rusqlite = "0.35.0"
+usn-journal-rs = "0.2.1"

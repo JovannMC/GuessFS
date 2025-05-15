@@ -6,7 +6,6 @@ use std::path::Path;
 use std::ptr;
 use std::{fs::create_dir_all, path::PathBuf};
 use std::collections::HashMap;
-use tauri::{AppHandle, Manager};
 use winapi::um::fileapi::GetVolumeInformationW;
 use winapi::um::winnt;
 
@@ -78,14 +77,9 @@ pub fn is_ntfs(path: &Path) -> bool {
 }
 
 pub fn get_index_db_path(
-    app_handle: &AppHandle,
+    app_data_dir: &Path,
     directory_path_str: &str,
 ) -> Result<PathBuf, String> {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
     if !app_data_dir.exists() {
         create_dir_all(&app_data_dir)
             .map_err(|e| format!("Failed to create app data directory: {}", e))?;

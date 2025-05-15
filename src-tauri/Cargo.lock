@@ -887,6 +887,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "directories"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16f5094c54661b38d03bd7e50df373292118db60b585c08a411c6d840017fe7d"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1643,7 +1652,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
- "usn-journal-rs",
+ "usn-journal-rs 0.1.1",
  "winapi",
 ]
 
@@ -3645,6 +3654,11 @@ name = "sidecar-indexer"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "directories",
+ "guessfs",
+ "jwalk",
+ "rusqlite",
+ "usn-journal-rs 0.2.1",
 ]
 
 [[package]]
@@ -4574,6 +4588,18 @@ dependencies = [
  "log",
  "lru",
  "uuid",
+ "windows 0.61.1",
+]
+
+[[package]]
+name = "usn-journal-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "700b834cbc8b9718685009590fa32ae7d5407b98b1856ae5f1204cfdfb89f097"
+dependencies = [
+ "log",
+ "lru",
+ "thiserror 2.0.12",
  "windows 0.61.1",
 ]
 
