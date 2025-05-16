@@ -5,13 +5,13 @@
 	import type { GameDifficulty, GameType } from "$lib/types/game";
 	import Icon from "@iconify/svelte";
 	import { invoke } from "@tauri-apps/api/core";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
 	import type { IndexOptions } from "$lib/types/database";
 
 	let difficulty: GameDifficulty = $state("easy");
 	let gameType: GameType = $state("directory");
 	let indexOptions: IndexOptions = {
-		path: "C:\\Users\\JovannMC\\Documents",
+		path: "C:\\Users\\JovannMC\\Videos",
 		index_files: true,
 		index_directories: true,
 		exclude_temporary: true,

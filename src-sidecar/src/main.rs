@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, time::Instant};
 
 use clap::{Arg, ArgAction, Command, value_parser};
-use directories::ProjectDirs;
+use directories::BaseDirs;
 use src_lib::{IndexOptions, get_drive_letter};
 use jwalk::WalkDir;
 use rusqlite::Connection;
@@ -57,9 +57,9 @@ fn main() {
         println!("elevate: true");
     }
 
-    let proj_dirs =
-        ProjectDirs::from("me", "jovannmc", "guessfs").expect("Could not get project dirs");
-    let app_data_dir = proj_dirs.data_dir();
+    let basedirs = BaseDirs::new().expect("Could not get base dirs");
+    let app_data_dir = basedirs.data_dir().join("me.jovannmc.guessfs");
+    println!("app data dir: {}", &app_data_dir.display());
     let index_options = IndexOptions {
         path: matches.get_one::<String>("path").unwrap().to_string(),
         index_directories: matches
@@ -102,7 +102,7 @@ fn main() {
             }),
     };
 
-    start_indexing(app_data_dir, index_options)
+    start_indexing(&app_data_dir, index_options)
         .map(|result| println!("{}", result))
         .unwrap_or_else(|err| eprintln!("Error: {}", err));
 }
@@ -136,6 +136,7 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
     let mut folders_found = 0;
     let mut files_found = 0;
     let mut ignored = 0;
+    let mut exists = 0;
 
     // TODO: check how is this handled in linux/macos
     let is_root = path.components().count() == 1; // check if the path is a root directory (e.g., C:\)
@@ -170,8 +171,12 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                     // if directory, insert
                     if entry.file_type().is_dir() {
                         if let Some(path) = entry.path().to_str() {
-                            if folder_stmt.execute(rusqlite::params![path]).unwrap() > 0 {
+                            let rows = folder_stmt.execute(rusqlite::params![path]).unwrap();
+                            if rows > 0 {
                                 folders_found += 1
+                            } else {
+                                // Already exists in DB
+                                exists += 1;
                             }
                             if !folder_map.contains_key(path) {
                                 let id: i64 = transaction
@@ -193,12 +198,14 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                                 std::path::Path::new(path).parent().and_then(|p| p.to_str())
                             {
                                 if let Some(folder_id) = folder_map.get(parent) {
-                                    if file_stmt
+                                    let rows = file_stmt
                                         .execute(rusqlite::params![path, folder_id])
-                                        .unwrap()
-                                        > 0
-                                    {
+                                        .unwrap();
+                                    if rows > 0 {
                                         files_found += 1
+                                    } else {
+                                        // Already exists in DB
+                                        exists += 1;
                                     }
                                 } else {
                                     // if not in map, fetch from DB
@@ -208,19 +215,23 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                                         |row| row.get(0),
                                     ) {
                                         folder_map.insert(parent.to_string(), folder_id);
-                                        if file_stmt
+                                        let rows = file_stmt
                                             .execute(rusqlite::params![path, &folder_id])
-                                            .unwrap()
-                                            > 0
-                                        {
+                                            .unwrap();
+                                        if rows > 0 {
                                             files_found += 1
+                                        } else {
+                                            // Already exists in DB
+                                            exists += 1;
                                         }
                                     } else {
                                         // not found, create parent folder in DB
-                                        if folder_stmt.execute(rusqlite::params![parent]).unwrap()
-                                            > 0
-                                        {
+                                        let rows = folder_stmt.execute(rusqlite::params![parent]).unwrap();
+                                        if rows > 0 {
                                             folders_found += 1
+                                        } else {
+                                            // Already exists in DB
+                                            exists += 1;
                                         }
                                     }
                                 }
@@ -276,8 +287,12 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                     let path_str = path_buf.to_str().unwrap_or("<invalid utf8>");
                     // if directory, insert
                     if entry.is_dir() {
-                        if folder_stmt.execute(rusqlite::params![path_str]).unwrap() > 0 {
+                        let rows = folder_stmt.execute(rusqlite::params![path_str]).unwrap();
+                        if rows > 0 {
                             folders_found += 1
+                        } else {
+                            // Already exists in DB
+                            exists += 1;
                         }
                         if !folder_map.contains_key(path_str) {
                             let id: i64 = transaction
@@ -310,10 +325,12 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                                     }
                                     Err(_) => {
                                         // create parent folder in DB if it doesn't exist
-                                        if folder_stmt.execute(rusqlite::params![parent]).unwrap()
-                                            > 0
-                                        {
+                                        let rows = folder_stmt.execute(rusqlite::params![parent]).unwrap();
+                                        if rows > 0 {
                                             folders_found += 1
+                                        } else {
+                                            // Already exists in DB
+                                            exists += 1;
                                         }
                                         let folder_id: i64 = transaction
                                             .query_row(
@@ -327,12 +344,14 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                                     }
                                 }
                             };
-                            if file_stmt
+                            let rows = file_stmt
                                 .execute(rusqlite::params![path_str, &folder_id])
-                                .unwrap()
-                                > 0
-                            {
+                                .unwrap();
+                            if rows > 0 {
                                 files_found += 1
+                            } else {
+                                // Already exists in DB
+                                exists += 1;
                             }
                         } else {
                             eprintln!("No parent folder for file: {path_str}");
@@ -351,8 +370,8 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
         .commit()
         .map_err(|e| format!("Failed to commit transaction: {}", e))?;
     println!(
-        "Indexing completed in {:.3?} ({} folders, {} files, {} ignored)",
-        duration, folders_found, files_found, ignored
+        "Indexing completed in {:.3?} ({} folders, {} files, {} ignored, {} already exists)",
+        duration, folders_found, files_found, ignored, exists
     );
     println!(
         "Excluded counts: {}",
@@ -364,7 +383,7 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
     );
 
     Ok(format!(
-        "Indexed {} folders and {} files in {:.2?} ({} ignored)",
-        folders_found, files_found, duration, ignored
+        "Indexed {} new folders and {} new files in {:.3?} ({} ignored, {} already exists)",
+        folders_found, files_found, duration, ignored, exists
     ))
 }
