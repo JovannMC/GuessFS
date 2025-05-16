@@ -15,7 +15,8 @@
   "dependencies": {
     "@fontsource/chakra-petch": "^5.2.6",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-shell": "~2"
   },
   "devDependencies": {
     "@iconify/svelte": "^5.0.0",

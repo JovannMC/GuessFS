@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path, time::Instant};
 
 use clap::{Arg, ArgAction, Command, value_parser};
 use directories::ProjectDirs;
-use guessfs_lib::{IndexOptions, get_drive_letter};
+use src_lib::{IndexOptions, get_drive_letter};
 use jwalk::WalkDir;
 use rusqlite::Connection;
 use usn_journal_rs::{mft::Mft, path::MftPathResolver, volume::Volume};
@@ -110,16 +110,16 @@ fn main() {
 fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<String, String> {
     let mut exclude_counts: HashMap<&'static str, usize> = HashMap::new();
 
-    let db_path = guessfs_lib::get_index_db_path(app_data_dir, &index_options.path)?;
+    let db_path = src_lib::get_index_db_path(app_data_dir, &index_options.path)?;
 
     let mut db =
         Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
     if !db_path.exists() {
-        guessfs_lib::init_db(&db).map_err(|e| format!("Failed to initialize database: {}", e))?;
+        src_lib::init_db(&db).map_err(|e| format!("Failed to initialize database: {}", e))?;
         println!("New database created at: {}", db_path.display());
     } else {
-        guessfs_lib::init_db(&db).map_err(|e| format!("Failed to initialize database: {}", e))?;
+        src_lib::init_db(&db).map_err(|e| format!("Failed to initialize database: {}", e))?;
         println!("Database already exists at: {}", db_path.display());
     }
 
@@ -140,7 +140,7 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
     // TODO: check how is this handled in linux/macos
     let is_root = path.components().count() == 1; // check if the path is a root directory (e.g., C:\)
 
-    let is_ntfs = guessfs_lib::is_ntfs(&path);
+    let is_ntfs = src_lib::is_ntfs(&path);
     // Non-NTFS filesystem / not Windows
     // also check if the path is not a root directory, because with MFT we can only index the entire root
     if !is_ntfs || (is_ntfs && !is_root) {
@@ -158,7 +158,7 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
             match entry {
                 Ok(entry) => {
                     // check if needed to be excluded
-                    if guessfs_lib::should_exclude(
+                    if src_lib::should_exclude(
                         &entry.path(),
                         index_options.clone(),
                         &mut exclude_counts,
@@ -264,7 +264,7 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
             match path_resolver.resolve_path(&entry) {
                 Some(path_buf) => {
                     // check if needed to be excluded
-                    if guessfs_lib::should_exclude(
+                    if src_lib::should_exclude(
                         &path_buf,
                         index_options.clone(),
                         &mut exclude_counts,

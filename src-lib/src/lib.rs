@@ -1,11 +1,11 @@
 use regex::Regex;
 use rusqlite::{Connection, Result as RusqliteResult};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr;
 use std::{fs::create_dir_all, path::PathBuf};
+use std::collections::HashMap;
 use winapi::um::fileapi::GetVolumeInformationW;
 use winapi::um::winnt;
 
@@ -76,7 +76,10 @@ pub fn is_ntfs(path: &Path) -> bool {
     }
 }
 
-pub fn get_index_db_path(app_data_dir: &Path, directory_path_str: &str) -> Result<PathBuf, String> {
+pub fn get_index_db_path(
+    app_data_dir: &Path,
+    directory_path_str: &str,
+) -> Result<PathBuf, String> {
     if !app_data_dir.exists() {
         create_dir_all(&app_data_dir)
             .map_err(|e| format!("Failed to create app data directory: {}", e))?;
