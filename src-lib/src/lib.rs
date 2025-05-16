@@ -205,16 +205,31 @@ pub fn should_exclude(
             // exclude empty folders and files
             if options.exclude_empty == Some(true) {
                 if path.is_dir() {
-                    if let Ok(entries) = path.read_dir() {
-                        if entries.count() == 0 {
-                            *exclude_counts.entry("exclude_empty").or_insert(0) += 1;
-                            return true;
+                    match path.read_dir() {
+                        Ok(entries) => {
+                            let count = entries.count();
+                            if count == 0 {
+                                *exclude_counts.entry("exclude_empty").or_insert(0) += 1;
+                                return true;
+                            }
                         }
+                        Err(_) => {}
                     }
                 } else if path.is_file() {
-                    if metadata.len() == 0 {
-                        *exclude_counts.entry("exclude_empty").or_insert(0) += 1;
-                        return true;
+                    match File::open(path) {
+                        Ok(file) => {
+                            match file.metadata() {
+                                Ok(m) => {
+                                    let len = m.len();
+                                    if len == 0 {
+                                        *exclude_counts.entry("exclude_empty").or_insert(0) += 1;
+                                        return true;
+                                    }
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                        Err(_) => {}
                     }
                 }
             }
