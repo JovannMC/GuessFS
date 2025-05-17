@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::path::Path;
 use rusqlite::Connection;
 use src_lib::IndexOptions;
 use tauri::{AppHandle, Manager};
@@ -38,26 +39,29 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
         push_arg(&mut args, "--index", Some(index_values.join(",")));
     }
 
-    push_arg(
-        &mut args,
-        "--types",
-        index_options.file_types.as_ref().map(|v| v.join(",")),
-    );
-    push_arg(
-        &mut args,
-        "--exclude-regex",
-        index_options.excluded_regex.as_ref(),
-    );
-    push_arg(
-        &mut args,
-        "--exclude-paths",
-        index_options.excluded_paths.as_ref().map(|v| v.join(",")),
-    );
-    push_arg(
-        &mut args,
-        "--exclude-files",
-        index_options.excluded_files.as_ref().map(|v| v.join(",")),
-    );
+    if let Some(file_types) = &index_options.file_types {
+        if !file_types.is_empty() {
+            push_arg(&mut args, "--types", Some(file_types.join(",")));
+        }
+    }
+
+    if let Some(excluded_regex) = &index_options.excluded_regex {
+        if !excluded_regex.is_empty() {
+            push_arg(&mut args, "--exclude-regex", Some(excluded_regex.clone()));
+        }
+    }
+
+    if let Some(excluded_paths) = &index_options.excluded_paths {
+        if !excluded_paths.is_empty() {
+            push_arg(&mut args, "--exclude-paths", Some(excluded_paths.join(",")));
+        }
+    }
+
+    if let Some(excluded_files) = &index_options.excluded_files {
+        if !excluded_files.is_empty() {
+            push_arg(&mut args, "--exclude-files", Some(excluded_files.join(",")));
+        }
+    }
     let mut exclude_values = Vec::new();
     if index_options.exclude_hidden.unwrap_or(false) {
         exclude_values.push("hidden");
@@ -80,6 +84,19 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
 
     // run sidecar binary
     let sidecar_command = app_handle.shell().sidecar("src-sidecar").unwrap();
+
+    #[cfg(windows)]
+    {
+        let path = Path::new(&index_options.path);
+        if path.is_dir() && path.components().count() == 2 {
+            println!(
+                "Running sidecar in elevated mode for single directory path: {}",
+                index_options.path
+            );
+            push_arg(&mut args, "--elevate", None::<String>);
+        }
+    }
+
     let (mut rx, mut _child) = sidecar_command
         .args(&args)
         .spawn()
@@ -128,8 +145,8 @@ fn start_indexing(app_handle: AppHandle, index_options: IndexOptions) -> Result<
 }
 
 fn push_arg(args: &mut Vec<String>, flag: &str, value: Option<impl ToString>) {
+    args.push(flag.to_string());
     if let Some(val) = value {
-        args.push(flag.to_string());
         args.push(val.to_string());
     }
 }

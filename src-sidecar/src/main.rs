@@ -2,9 +2,10 @@ use std::{collections::HashMap, path::Path, time::Instant};
 
 use clap::{Arg, ArgAction, Command, value_parser};
 use directories::BaseDirs;
-use src_lib::{IndexOptions, get_drive_letter};
 use jwalk::WalkDir;
+use runas::Command as RunasCommand;
 use rusqlite::Connection;
+use src_lib::{IndexOptions, get_drive_letter};
 use usn_journal_rs::{mft::Mft, path::MftPathResolver, volume::Volume};
 
 fn main() {
@@ -21,19 +22,15 @@ fn main() {
         .get_matches();
 
     if matches.get_flag("elevate") {
-        // TODO: handle elevation request
-        #[cfg(target_os = "windows")]
-        {
-            println!("meow ur on windows tryna elevate");
-        }
-        #[cfg(target_os = "linux")]
-        {
-            println!("meow ur on linux tryna elevate");
-        }
-        #[cfg(target_os = "macos")]
-        {
-            println!("meow ur on macos tryna elevate");
-        }
+        // get path of executable and rerun self as admin
+        let path = std::env::current_exe().expect("Could not get current executable path");
+        let mut command = RunasCommand::new(&path);
+        let args = std::env::args().skip(1).collect::<Vec<_>>();
+        command.args(&args);
+        command
+            .status()
+            .expect("Failed to execute elevated command");
+        std::process::exit(0); // exit current process
     }
 
     println!("path: {}", matches.get_one::<String>("path").unwrap());
@@ -138,10 +135,9 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
     let mut ignored = 0;
     let mut exists = 0;
 
-    // TODO: check how is this handled in linux/macos
-    let is_root = path.components().count() == 1; // check if the path is a root directory (e.g., C:\)
-
+    let is_root = path.components().count() == 2; // check if the path is a root directory (e.g., C:\) - C: and \ counts as two components
     let is_ntfs = src_lib::is_ntfs(&path);
+
     // Non-NTFS filesystem / not Windows
     // also check if the path is not a root directory, because with MFT we can only index the entire root
     if !is_ntfs || (is_ntfs && !is_root) {
@@ -226,7 +222,8 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                                         }
                                     } else {
                                         // not found, create parent folder in DB
-                                        let rows = folder_stmt.execute(rusqlite::params![parent]).unwrap();
+                                        let rows =
+                                            folder_stmt.execute(rusqlite::params![parent]).unwrap();
                                         if rows > 0 {
                                             folders_found += 1
                                         } else {
@@ -325,7 +322,8 @@ fn start_indexing(app_data_dir: &Path, index_options: IndexOptions) -> Result<St
                                     }
                                     Err(_) => {
                                         // create parent folder in DB if it doesn't exist
-                                        let rows = folder_stmt.execute(rusqlite::params![parent]).unwrap();
+                                        let rows =
+                                            folder_stmt.execute(rusqlite::params![parent]).unwrap();
                                         if rows > 0 {
                                             folders_found += 1
                                         } else {

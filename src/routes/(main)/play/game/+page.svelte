@@ -62,7 +62,7 @@
 			console.log("Stopping indexing")
 			isIndexing = false;
 			// stop indexing
-			invoke("stop_indexing", { pathString: "C:\\"})
+			invoke("stop_indexing", { pathString: indexOptions.path })
 				.catch((error) => {
 					console.error("Error while stopping indexing:", error);
 				});
