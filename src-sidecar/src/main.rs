@@ -26,6 +26,12 @@ fn main() {
         let path = std::env::current_exe().expect("Could not get current executable path");
         let mut command = RunasCommand::new(&path);
         let args = std::env::args().skip(1).collect::<Vec<_>>();
+        // REMOVE --elevate before running new instance
+        // ...i learned this the hard way
+        let args: Vec<String> = args
+            .into_iter()
+            .filter(|arg| arg != "--elevate")
+            .collect();
         command.args(&args);
         command
             .status()
